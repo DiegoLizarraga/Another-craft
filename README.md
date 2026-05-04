@@ -1,4 +1,7 @@
-# Another Craft 🤖
+# Another Craft 
+<img width="813" height="515" alt="image" src="https://github.com/user-attachments/assets/2dc1e3b1-a2f1-4113-8167-e6daea5a0d34" />
+
+
 
 Bot de Minecraft con IA local usando [Mineflayer](https://github.com/PrismarineJS/mineflayer) y [Ollama](https://ollama.com). El bot se llama **mina**, tiene personalidad VTuber, responde en el chat, toma decisiones autónomas y puede minar, moverse y atacar.
 
