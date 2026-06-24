@@ -1,122 +1,109 @@
-const { Movements, goals } = require('mineflayer-pathfinder')
+// ── actions.js ───────────────────────────────────────────────────────────────────
+// Traduce la decisión del LLM ({ chat, action, target }) a habilidades reales.
+// Respeta el pánico (huir de creeper manda) y usa un candado para no lanzar dos
+// rutas de pathfinder a la vez.
 
-const ACTION_HANDLERS = {
-  idle,
-  move,
-  mine,
-  attack,
-  collect,
-  craft,
-  eat,
+const skills = require('./skills')
+const { toBlockName, toMobName } = require('./vocab')
+
+const HANDLERS = {
+  idle: async () => {},
+
+  follow: (bot, target) => {
+    const who = target || bot.mina.owner
+    return who ? voidify(skills.follow(bot, who)) : null
+  },
+
+  come: (bot, target) => skills.comeToPlayer(bot, target || bot.mina.owner),
+
+  goto: async (bot, target) => {
+    if (!target) return
+    const parts = String(target).split(',').map(Number)
+    if (parts.length >= 2 && parts.every(n => !isNaN(n))) {
+      await skills.goToCoords(bot, parts[0], parts[parts.length - 1])
+    }
+  },
+
+  mine: (bot, target) => {
+    const block = toBlockName(target)
+    return block ? skills.mineNearest(bot, block, 1) : null
+  },
+
+  chop: (bot, target) => {
+    const block = toBlockName(target)
+    return skills.chopTree(bot, block && /_log$/.test(block) ? block : null)
+  },
+
+  attack: (bot, target) => {
+    const mob = toMobName(target)
+    return mob ? skills.attackNearest(bot, mob) : null
+  },
+
+  collect: (bot) => skills.collectNearbyItems(bot, 16),
+
+  craft: (bot, target) => craftItem(bot, target),
+
+  eat: (bot, target) => skills.eatFood(bot, target),
+
+  drop: (bot, target) => skills.dropItem(bot, toBlockName(target) || target, bot.mina.owner),
+
+  flee: (bot) => {
+    const threat = skills.nearestHostile(bot, 16)
+    return threat ? skills.fleeFrom(bot, threat, 16) : null
+  },
+
+  explore: (bot) => skills.explore(bot),
 }
 
 async function executeDecision(bot, decision) {
-  const { chat, action, target, reason } = decision
-  console.log(`[mina] ${reason || ''} → ${action}(${target || '-'}) | "${chat}"`)
+  const { chat, action, target, reason } = decision || {}
+  console.log(`[mina] ${reason || ''} → ${action}(${target || '-'}) | "${chat || ''}"`)
 
-  if (chat) bot.chat(chat)
+  if (chat) bot.chat(String(chat).slice(0, 200))
 
-  const handler = ACTION_HANDLERS[action] || idle
+  // El pánico (huir de un creeper) tiene prioridad absoluta sobre lo que pida el LLM.
+  if (bot.mina.panic || bot.mina.reflexBusy) return
+
+  const handler = HANDLERS[action]
+  if (!handler || action === 'idle') return
+
+  bot.mina.busy = true
   try {
     await handler(bot, target)
   } catch (err) {
-    console.error(`[Acción] Error en ${action}:`, err.message)
+    console.error(`[acción] error en ${action}:`, err.message)
+  } finally {
+    bot.mina.busy = false
   }
 }
 
-// ── Handlers ──────────────────────────────────────────────────────────────────
-
-async function idle() {
-  // no hace nada
-}
-
-async function move(bot, target) {
-  if (!target) return
-  // target puede ser "away_from_creeper" o "x,z"
-  if (target === 'away_from_creeper' || target === 'away') {
-    const creeper = findNearestMob(bot, 'creeper')
-    if (creeper) {
-      const away = bot.entity.position.plus(
-        bot.entity.position.minus(creeper.position).normalize().scale(16)
-      )
-      await goTo(bot, Math.floor(away.x), Math.floor(away.z))
-    }
-    return
-  }
-  const parts = target.split(',').map(Number)
-  if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-    await goTo(bot, parts[0], parts[1])
-  }
-}
-
-async function mine(bot, blockName) {
-  if (!blockName) return
-  const mcData = require('minecraft-data')(bot.version)
-  const blockType = mcData.blocksByName[blockName]
-  if (!blockType) return
-
-  const block = bot.findBlock({ matching: blockType.id, maxDistance: 32 })
-  if (!block) return
-
-  await goToBlock(bot, block)
-  await bot.dig(block)
-}
-
-async function attack(bot, targetName) {
-  if (!targetName) return
-  const entity = findNearestMob(bot, targetName)
-  if (entity) bot.attack(entity)
-}
-
-async function collect(bot, itemName) {
-  if (!itemName) return
-  const item = Object.values(bot.entities).find(
-    e => e.name === 'item' && e.position.distanceTo(bot.entity.position) < 16
-  )
-  if (item) await goTo(bot, Math.floor(item.position.x), Math.floor(item.position.z))
-}
-
-async function craft(bot, itemName) {
+// Crafteo: intenta sin mesa; si hace falta, busca una mesa cercana.
+async function craftItem(bot, name) {
+  const itemName = toBlockName(name) || name
   if (!itemName) return
   const mcData = require('minecraft-data')(bot.version)
   const item = mcData.itemsByName[itemName]
   if (!item) return
 
-  const recipe = bot.recipesFor(item.id)[0]
-  if (recipe) await bot.craft(recipe, 1, null)
+  let recipes = bot.recipesFor(item.id, null, 1, null)
+  let table = null
+  if (!recipes.length) {
+    const tableType = mcData.blocksByName.crafting_table
+    table = tableType ? bot.findBlock({ matching: tableType.id, maxDistance: 16 }) : null
+    if (table) {
+      await skills.goNear(bot, table.position, 2)
+      recipes = bot.recipesFor(item.id, null, 1, table)
+    }
+  }
+  if (recipes.length) {
+    await bot.craft(recipes[0], 1, table)
+  } else {
+    bot.chat(`No puedo craftear ${itemName} con lo que tengo 😅`)
+  }
 }
 
-async function eat(bot, foodName) {
-  const mcData = require('minecraft-data')(bot.version)
-  const foodItem = bot.inventory.items().find(i => {
-    if (foodName) return i.name === foodName
-    return mcData.foods?.[i.id] !== undefined
-  })
-  if (foodItem) await bot.equip(foodItem, 'hand').then(() => bot.consume())
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-async function goTo(bot, x, z) {
-  const mcData = require('minecraft-data')(bot.version)
-  bot.pathfinder.setMovements(new Movements(bot, mcData))
-  await bot.pathfinder.goto(new goals.GoalXZ(x, z))
-}
-
-async function goToBlock(bot, block) {
-  const mcData = require('minecraft-data')(bot.version)
-  bot.pathfinder.setMovements(new Movements(bot, mcData))
-  await bot.pathfinder.goto(
-    new goals.GoalGetToBlock(block.position.x, block.position.y, block.position.z)
-  )
-}
-
-function findNearestMob(bot, name) {
-  return Object.values(bot.entities)
-    .filter(e => e !== bot.entity && e.name === name)
-    .sort((a, b) =>
-      a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position)
-    )[0] || null
+function voidify(value) {
+  return Promise.resolve(value).then(() => {})
 }
 
 module.exports = { executeDecision }

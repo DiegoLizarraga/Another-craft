@@ -1,11 +1,20 @@
+// ── bot.js ───────────────────────────────────────────────────────────────────────
+// Punto de entrada. Conecta a mina al servidor y orquesta sus tres "capas de mente":
+//   1) Reflejos   (reflexes.js)  -> supervivencia en tiempo real, sin LLM
+//   2) Comandos   (commands.js)  -> respuestas instantáneas a órdenes del chat
+//   3) Cerebro    (brain.js)     -> personalidad y decisiones autónomas con el LLM
 require('dotenv').config()
+
 const mineflayer = require('mineflayer')
 const { pathfinder } = require('mineflayer-pathfinder')
 const { getWorldContext } = require('./world')
 const { think } = require('./brain')
 const { executeDecision } = require('./actions')
+const { handleCommand } = require('./commands')
+const { startReflexes } = require('./reflexes')
+const skills = require('./skills')
 
-const THINK_INTERVAL_MS = 15000
+const THINK_INTERVAL_MS = parseInt(process.env.THINK_INTERVAL_MS) || 20000
 
 const bot = mineflayer.createBot({
   host: process.env.MC_HOST || 'localhost',
@@ -16,61 +25,109 @@ const bot = mineflayer.createBot({
 
 bot.loadPlugin(pathfinder)
 
-// ── Viewer ────────────────────────────────────────────────────────────────────
+// Estado compartido de mina. Coordina las tres capas para que no se pisen.
+bot.mina = {
+  owner: process.env.MC_OWNER || null, // jugador "dueño" (último que le habló)
+  busy: false,        // hay una acción de movimiento en curso
+  panic: false,       // huyendo de un creeper (máxima prioridad)
+  reflexBusy: false,  // un reflejo está ejecutándose
+  thinking: false,    // hay una llamada al LLM en curso (evita solapamientos)
+  defendSelf: process.env.MINA_DEFEND !== 'false', // contraatacar si la golpean
+  lastReflexChat: 0,
+  lastArmorCheck: 0,
+}
+// skills.follow guarda el nombre en bot._minaFollowing; lo reflejamos en mina.following
+Object.defineProperty(bot.mina, 'following', {
+  get() { return bot._minaFollowing || null },
+  set(v) { bot._minaFollowing = v },
+})
+
+// ── Viewer (opcional) ────────────────────────────────────────────────────────────
 
 bot.once('spawn', () => {
   if (process.env.VIEWER_ENABLED === 'true') {
-    const { mineflayer: viewer } = require('prismarine-viewer')
-    const port = parseInt(process.env.VIEWER_PORT) || 3007
-    viewer(bot, { port, firstPerson: false })
-    console.log(`[Viewer] Abierto en http://localhost:${port}`)
+    try {
+      const { mineflayer: viewer } = require('prismarine-viewer')
+      const port = parseInt(process.env.VIEWER_PORT) || 3007
+      viewer(bot, { port, firstPerson: false })
+      console.log(`[viewer] abierto en http://localhost:${port}`)
+    } catch (err) {
+      console.error('[viewer] no se pudo iniciar:', err.message)
+    }
   }
 })
 
-// ── Ciclo de vida ─────────────────────────────────────────────────────────────
+// ── Ciclo de vida ─────────────────────────────────────────────────────────────────
 
 bot.on('spawn', () => {
-  console.log(`[mina] Conectada como ${bot.username} | LLM: ${process.env.LLM_PROVIDER || 'ollama'}`)
-  bot.chat('¡Kyaa~ Hola a todos! ¡Mina ha llegado!')
+  console.log(`[mina] conectada como ${bot.username} | LLM: ${process.env.LLM_PROVIDER || 'ollama'}`)
+  bot.chat('¡Kyaa~ Hola a todos! ¡Mina ha llegado! Escribe "ayuda" para ver qué sé hacer 💖')
+  skills.equipArmor(bot).catch(() => {})
+  startReflexes(bot)
   startAutonomousLoop()
 })
 
-bot.on('kicked', reason => console.log('[mina] Expulsada:', reason))
-bot.on('error', err => console.error('[mina] Error:', err.message))
+bot.on('death', () => {
+  console.log('[mina] murió 💀')
+  skills.stopAll(bot)
+  bot.mina.busy = false
+})
 
-// ── Chat ───────────────────────────────────────────────────────────────────────
+bot.on('kicked', reason => console.log('[mina] expulsada:', reason))
+bot.on('error', err => console.error('[mina] error:', err.message))
+
+// ── Chat: comandos primero, LLM después ────────────────────────────────────────────
 
 bot.on('chat', async (username, message) => {
   if (username === bot.username) return
-  console.log(`[Chat] ${username}: ${message}`)
+  console.log(`[chat] ${username}: ${message}`)
 
   try {
-    const context = getWorldContext(bot)
-    const decision = await think(context, message)
-    await executeDecision(bot, decision)
+    // 1) ¿Es un comando directo? Respuesta instantánea, sin gastar LLM.
+    const cmd = await handleCommand(bot, username, message)
+    if (cmd && cmd.handled) {
+      if (cmd.reply) bot.chat(cmd.reply)
+      return
+    }
+
+    // 2) Si no, solo respondemos con el LLM cuando la mencionan (para no spamear).
+    const mentioned = /\bmina\b/i.test(message) || message.endsWith('?')
+    if (!mentioned || bot.mina.thinking) return
+
+    bot.mina.thinking = true
+    try {
+      const decision = await think(getWorldContext(bot), message)
+      await executeDecision(bot, decision)
+    } finally {
+      bot.mina.thinking = false
+    }
   } catch (err) {
-    console.error('[mina] Error al responder:', err.message)
-    bot.chat('¡Uwaaah! Algo salió mal, lo siento...')
+    console.error('[mina] error al responder:', err.message)
+    bot.chat('¡Uwaaah! Algo salió mal, lo siento... 😖')
   }
 })
 
-// ── Bucle autónomo ─────────────────────────────────────────────────────────────
+// ── Bucle autónomo (decisiones del LLM cuando no hay nada urgente) ──────────────────
 
 let autonomousTimer = null
 
 function startAutonomousLoop() {
   autonomousTimer = setInterval(async () => {
+    // Cede el paso si: hay pánico, un reflejo activo, una acción en curso, siguiendo, o ya pensando.
+    if (bot.mina.panic || bot.mina.reflexBusy || bot.mina.busy || bot.mina.following || bot.mina.thinking) return
+    bot.mina.thinking = true
     try {
-      const context = getWorldContext(bot)
-      const decision = await think(context)
+      const decision = await think(getWorldContext(bot))
       await executeDecision(bot, decision)
     } catch (err) {
-      console.error('[mina] Error en bucle autónomo:', err.message)
+      console.error('[mina] error en bucle autónomo:', err.message)
+    } finally {
+      bot.mina.thinking = false
     }
   }, THINK_INTERVAL_MS)
 }
 
 bot.on('end', () => {
   clearInterval(autonomousTimer)
-  console.log('[mina] Desconectada.')
+  console.log('[mina] desconectada.')
 })
