@@ -36,6 +36,7 @@ bot.mina = {
   defendSelf: process.env.MINA_DEFEND !== 'false', // contraatacar si la golpean
   lastReflexChat: 0,
   lastArmorCheck: 0,
+  nightShelterAt: 0,  // último refugio nocturno (arrimarse/antorcha) para no repetir
 }
 // skills.follow guarda el nombre en bot._minaFollowing; lo reflejamos en mina.following
 Object.defineProperty(bot.mina, 'following', {

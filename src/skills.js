@@ -5,6 +5,7 @@
 
 const { Movements, goals } = require('mineflayer-pathfinder')
 const { GoalNear, GoalFollow, GoalXZ, GoalGetToBlock } = goals
+const Vec3 = require('vec3')
 
 const TOOL_TIERS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden']
 
@@ -105,6 +106,14 @@ async function comeToPlayer(bot, username) {
   if (!e) return false
   await goNear(bot, e.position, 2)
   return true
+}
+
+// Camina hacia una posición SIN bloquear (goal de un solo uso, no se espera). Lo usa el
+// refugio nocturno para acercarse a un jugador sin tomar reflexBusy, de modo que un
+// creeper u otra urgencia pueda interrumpir el camino (los reflejos llaman a stopAll).
+function approach(bot, position, range = 3) {
+  ensureMovements(bot)
+  bot.pathfinder.setGoal(new GoalNear(position.x, position.y, position.z, range))
 }
 
 // Explorar: caminar ~24 bloques en una dirección al azar.
@@ -370,6 +379,50 @@ async function fleeFrom(bot, entity, distance = 16) {
   try { await goToCoords(bot, away.x, away.z) } catch {}
 }
 
+// ── Refugio nocturno (iluminar la zona) ──────────────────────────────────────────
+
+// True si donde está parada mina está oscuro (luz artificial baja → riesgo de mobs).
+// Solo miramos block.light (antorchas/lava), no skyLight: de noche el cielo ya no
+// ilumina, así que lo relevante para decidir si poner una antorcha es la luz puesta.
+function isDarkHere(bot) {
+  const at = bot.blockAt(bot.entity.position.floored())
+  if (!at) return false // chunk no cargado: no arriesgamos
+  return (at.light || 0) <= 5
+}
+
+// Intenta colocar UNA antorcha cerca de los pies de mina para iluminar. Devuelve
+// true si la colocó. Defensiva: si no tiene antorcha, no hay sitio o placeBlock
+// lanza, devuelve false. Busca 'torch' exacto (no soul_torch/redstone_torch).
+async function placeTorchNearby(bot) {
+  const torch = bot.inventory.items().find(i => i.name === 'torch')
+  if (!torch) return false
+
+  const feet = bot.entity.position.floored()
+  // Colocamos antorchas DE PIE sobre el suelo de las celdas vecinas (lados y diagonales),
+  // que es lo fiable: la antorcha va en una celda de aire libre AL LADO de mina.
+  const around = [
+    new Vec3(1, 0, 0), new Vec3(-1, 0, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1),
+    new Vec3(1, 0, 1), new Vec3(1, 0, -1), new Vec3(-1, 0, 1), new Vec3(-1, 0, -1),
+  ]
+  const candidates = around.map(f => ({ ref: feet.offset(f.x, -1, f.z), face: new Vec3(0, 1, 0) }))
+  candidates.push({ ref: feet.offset(0, -1, 0), face: new Vec3(0, 1, 0) }) // último recurso: bajo los pies
+
+  let equipped = false
+  for (const c of candidates) {
+    const ref = bot.blockAt(c.ref)
+    if (!ref || ref.boundingBox !== 'block') continue // la referencia debe ser sólida
+    const dest = ref.position.plus(c.face)
+    const destBlock = bot.blockAt(dest)
+    if (!destBlock || destBlock.boundingBox !== 'empty') continue // el hueco debe estar libre
+    try {
+      if (!equipped) { await bot.equip(torch, 'hand'); equipped = true }
+      await bot.placeBlock(ref, c.face) // async; lanza si no se colocó
+      return true
+    } catch { /* ese sitio no sirvió: probamos el siguiente */ }
+  }
+  return false
+}
+
 // ── util ──────────────────────────────────────────────────────────────────────
 
 function sleep(ms) {
@@ -387,6 +440,7 @@ module.exports = {
   goToCoords,
   follow,
   comeToPlayer,
+  approach,
   explore,
   equipBestTool,
   equipBestWeapon,
@@ -398,5 +452,7 @@ module.exports = {
   eatFood,
   equipArmor,
   fleeFrom,
+  isDarkHere,
+  placeTorchNearby,
   sleep,
 }

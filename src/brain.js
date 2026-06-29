@@ -72,11 +72,50 @@ async function think(worldContext, playerMessage = null) {
       : await callOllama(messages)
   } catch (err) {
     console.error('[brain] fallo del LLM:', err.message)
-    return { chat: null, action: 'idle', target: null, reason: 'LLM no disponible' }
+    return { chat: null, action: 'idle', target: null, reason: `LLM no disponible: ${err.message}` }
   }
 
   history.push({ role: 'assistant', content: raw })
   return parseDecision(raw)
+}
+
+// ── Fetch con timeout ────────────────────────────────────────────────────────────
+// Si el LLM se cuelga (Ollama cargando un modelo, OpenRouter sin responder...),
+// abortamos la petición para que mina no se quede "pensando" para siempre y bloquee
+// el bucle autónomo. El timeout cubre TODA la petición —conexión, cabeceras y cuerpo—
+// porque leemos el cuerpo DENTRO del try, antes de limpiar el timer.
+const DEFAULT_TIMEOUT_MS = 15000
+
+function timeoutMs() {
+  const n = Number(process.env.LLM_TIMEOUT_MS)
+  // Descarta NaN, vacío, 0 y negativos -> evita un setTimeout(0) que abortaría al instante.
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_TIMEOUT_MS
+}
+
+// Devuelve un objeto ya materializado: { ok, status, text, json() }. Nunca deja el
+// timer colgando (clearTimeout en finally). `etiqueta` solo da mensajes claros.
+async function fetchConTimeout(url, opciones, etiqueta) {
+  const ms = timeoutMs()
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), ms)
+  try {
+    const res = await fetch(url, { ...opciones, signal: controller.signal })
+    const text = await res.text() // leemos el cuerpo aún protegidos por el signal
+    return {
+      ok: res.ok,
+      status: res.status,
+      text,
+      json: () => { try { return JSON.parse(text) } catch { return null } },
+    }
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      throw new Error(`${etiqueta}: sin respuesta en ${ms}ms (timeout). ¡mina se cansó de esperar!`)
+    }
+    const causa = err && err.cause && err.cause.code ? ` (${err.cause.code})` : ''
+    throw new Error(`${etiqueta}: error de red${causa}: ${err.message}`)
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 // ── Ollama (local) ───────────────────────────────────────────────────────────────
@@ -85,14 +124,14 @@ async function callOllama(messages) {
   const host = process.env.OLLAMA_HOST || 'http://localhost:11434'
   const model = process.env.OLLAMA_MODEL || 'dolphin-phi'
 
-  const res = await fetch(`${host}/api/chat`, {
+  const res = await fetchConTimeout(`${host}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, messages, stream: false, format: 'json' }),
-  })
-  if (!res.ok) throw new Error(`Ollama ${res.status}: ${await res.text()}`)
-  const data = await res.json()
-  return data.message.content
+  }, 'Ollama')
+  if (!res.ok) throw new Error(`Ollama ${res.status}: ${res.text}`)
+  const data = res.json()
+  return data?.message?.content ?? '' // defensa: si el modelo respondió raro, no reventar
 }
 
 // ── OpenRouter (online, modelos gratis) ──────────────────────────────────────────
@@ -102,7 +141,7 @@ async function callOpenRouter(messages) {
   const model = process.env.OPENROUTER_MODEL || 'mistralai/mistral-7b-instruct:free'
   if (!key) throw new Error('Falta OPENROUTER_API_KEY en el .env')
 
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  const res = await fetchConTimeout('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -117,10 +156,10 @@ async function callOpenRouter(messages) {
       max_tokens: 250,
       response_format: { type: 'json_object' },
     }),
-  })
-  if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${await res.text()}`)
-  const data = await res.json()
-  return data.choices?.[0]?.message?.content || ''
+  }, 'OpenRouter')
+  if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${res.text}`)
+  const data = res.json()
+  return data?.choices?.[0]?.message?.content || ''
 }
 
 // ── Parser tolerante ─────────────────────────────────────────────────────────────

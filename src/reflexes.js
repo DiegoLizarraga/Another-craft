@@ -77,6 +77,37 @@ async function tick(bot) {
     bot.mina.lastArmorCheck = now
     await skills.equipArmor(bot)
   }
+
+  // 6) NOCHE → refugio básico (BAJA prioridad). Solo de noche, sin pánico, y si no la
+  //    mandaron a hacer algo ni está siguiendo a alguien (para no pisar sus órdenes).
+  //    Jerarquía simple y acotada: arrimarse a un jugador; si no hay nadie y está
+  //    oscuro, poner UNA antorcha. Cooldown para no machacar el bucle ni spamear.
+  const esNoche = bot.time && bot.time.timeOfDay >= 13000
+  if (esNoche && !bot.mina.busy && !bot.mina.panic && !bot.mina.following && !bot.mina.thinking &&
+      now - (bot.mina.nightShelterAt || 0) > 10000) {
+    const jugador = skills.nearestPlayer(bot, 24)
+    if (jugador) {
+      // Acercarse SIN bloquear (sin reflexBusy ni await): el camino puede tardar varios
+      // segundos y NO debe impedir reaccionar a un creeper. Si aparece uno, el paso 1
+      // hace stopAll y cancela este goal. Reevaluamos cada cooldown (sigue al jugador).
+      bot.mina.nightShelterAt = now
+      sayThrottled(bot, 'Es de noche y me da miedo... me quedo cerquita de ti 🌙😳', 30000)
+      skills.approach(bot, jugador.position, 3)
+      return
+    }
+    if (skills.isDarkHere(bot)) {
+      // Colocar UNA antorcha es rápido: tomamos reflexBusy solo ese instante.
+      bot.mina.nightShelterAt = now
+      bot.mina.reflexBusy = true
+      try {
+        const puesta = await skills.placeTorchNearby(bot)
+        sayThrottled(bot, puesta
+          ? '¡Pongo una antorcha para no estar a oscuras! 🔥'
+          : 'Está muy oscuro y no tengo antorchas... qué miedito 😣', 30000)
+      } finally { bot.mina.reflexBusy = false }
+      return
+    }
+  }
 }
 
 function sayThrottled(bot, text, ms) {
