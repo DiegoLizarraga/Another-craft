@@ -12,6 +12,7 @@ const { think } = require('./brain')
 const { executeDecision } = require('./actions')
 const { handleCommand } = require('./commands')
 const { startReflexes } = require('./reflexes')
+const { startChatter, line } = require('./chatter')
 const skills = require('./skills')
 
 const THINK_INTERVAL_MS = parseInt(process.env.THINK_INTERVAL_MS) || 20000
@@ -59,16 +60,30 @@ bot.once('spawn', () => {
 
 // ── Ciclo de vida ─────────────────────────────────────────────────────────────────
 
+// `spawn` se dispara también en cada respawn tras morir. Los timers (reflejos, chatter,
+// bucle autónomo) se arrancan UNA sola vez para no duplicarlos; lo demás (armadura,
+// saludo de regreso) sí corre cada vez.
+let started = false
+
 bot.on('spawn', () => {
+  skills.equipArmor(bot).catch(() => {})
+
+  if (started) {
+    bot.chat(line('respawn'))
+    return
+  }
+  started = true
+
   console.log(`[mina] conectada como ${bot.username} | LLM: ${process.env.LLM_PROVIDER || 'ollama'}`)
   bot.chat('¡Kyaa~ Hola a todos! ¡Mina ha llegado! Escribe "ayuda" para ver qué sé hacer 💖')
-  skills.equipArmor(bot).catch(() => {})
   startReflexes(bot)
+  startChatter(bot)
   startAutonomousLoop()
 })
 
 bot.on('death', () => {
   console.log('[mina] murió 💀')
+  bot.chat(line('death'))
   skills.stopAll(bot)
   bot.mina.busy = false
 })

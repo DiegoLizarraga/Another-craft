@@ -5,6 +5,7 @@
 
 const skills = require('./skills')
 const { toBlockName, toMobName } = require('./vocab')
+const { line, pick } = require('./chatter')
 
 // Resuelve una palabra a un bloque/mob REAL (valida contra minecraft-data). Devuelve
 // null si no existe — así "mina hola" no intenta minar un bloque inexistente, dado que
@@ -47,21 +48,23 @@ async function handleCommand(bot, username, message) {
   if (/\b(sigueme|sigue ?me|ven conmigo|acompaname|follow)\b/.test(text)) {
     skills.stopAll(bot)
     const ok = skills.follow(bot, username)
-    return reply(ok ? `¡Voy contigo, ${username}! ✨` : 'No te veo... ¿dónde estás? 😖')
+    return reply(ok
+      ? pick([`¡Voy contigo, ${username}! ✨`, `¡A donde tú vayas, ${username}! 🏃‍♀️`, `¡Pegadita a ti! 💕`])
+      : 'No te veo... ¿dónde estás? 😖')
   }
 
   // ── Ven aquí / acércate ──────────────────────────────────────────────────────
   if (/\b(ven aqui|ven aca|ven aca|ven|come here)\b/.test(text) && !/\bven a (minar|por|el|la)\b/.test(text)) {
     skills.stopAll(bot)
     run(bot, 'come', skills.comeToPlayer(bot, username))
-    return reply(`¡Ya voy, ${username}! 🏃‍♀️`)
+    return reply(pick([`¡Ya voy, ${username}! 🏃‍♀️`, `¡Voooy! ¡Espérame! ✨`, `¡Corriendo hacia ti! 💨`]))
   }
 
   // ── Parar / quedarse ──────────────────────────────────────────────────────────
   if (/\b(para|parate|detente|quieta|quedate|alto|stop|espera)\b/.test(text)) {
     skills.stopAll(bot)
     bot.mina.busy = false
-    return reply('¡Me quedo aquí! 🧍‍♀️')
+    return reply(pick(['¡Me quedo aquí! 🧍‍♀️', '¡Okie, no me muevo! 🛑', '¡Quietecita me quedo! 😌']))
   }
 
   // ── Talar árbol completo ──────────────────────────────────────────────────────
@@ -162,12 +165,83 @@ async function handleCommand(bot, username, message) {
     return reply(`Vida ${bot.health}/20 ❤️ y hambre ${bot.food}/20 🍗`)
   }
 
+  // ── Mírame / voltea ────────────────────────────────────────────────────────────
+  if (/\b(mirame|voltea|mira aca|mira aqui|look)\b/.test(text)) {
+    const e = skills.playerEntity(bot, username)
+    if (e) {
+      bot.lookAt(e.position.offset(0, 1.6, 0)).catch(() => {})
+      return reply(pick(['¡Te veo! 👀💕', '¡Holaaa! 😊', '¡Aquí estoy mirándote! ✨']))
+    }
+    return reply('¡No te encuentro! ¿Dónde estás? 😖')
+  }
+
+  // ── Saltar ──────────────────────────────────────────────────────────────────────
+  if (/\b(salta|brinca|jump)\b/.test(text)) {
+    bot.setControlState('jump', true)
+    setTimeout(() => bot.setControlState('jump', false), 350)
+    return reply(pick(['¡Hop hop! 🦘', '¡Boing! ✨', '¡Mírame saltar! 🤸‍♀️']))
+  }
+
+  // ── Bailar ──────────────────────────────────────────────────────────────────────
+  if (/\b(baila|bailar|dance)\b/.test(text)) {
+    skills.stopAll(bot)
+    run(bot, 'dance', dance(bot))
+    return reply(pick(['¡A bailaaar! 💃✨', '¡Música, por favor! 🎶🕺', '¡Mira mis pasos! 💖']))
+  }
+
+  // ── Chiste ──────────────────────────────────────────────────────────────────────
+  if (/\b(chiste|cuentame un chiste|hazme reir|un chiste|joke)\b/.test(text)) {
+    return reply(line('joke'))
+  }
+
+  // ── Hora del juego / día o noche ─────────────────────────────────────────────────
+  if (/\b(que hora es|es de noche|es de dia|hora del juego)\b/.test(text)) {
+    const noche = bot.time.timeOfDay >= 13000
+    return reply(noche
+      ? 'Es de noche... ¡brrr, cuidado con los monstruos! 🌙👻'
+      : '¡Es de día! ¡Perfecto para aventuras! ☀️')
+  }
+
   // ── Ayuda ──────────────────────────────────────────────────────────────────────
   if (/\b(ayuda|help|que sabes hacer|comandos)\b/.test(text)) {
-    return reply('Puedo: sígueme, ven, para, mina <bloque>, tala árbol, ataca <mob>, recoge, suelta <item>, explora, inventario 💡')
+    return reply('Puedo: sígueme, ven, para, mina <bloque>, tala árbol, ataca <mob>, defiéndeme, recoge, suelta <item>, come, explora, inventario, posición, vida, mírame, salta, baila, chiste 💡')
+  }
+
+  // ── Charla social (sin LLM): saludos, gracias, piropos, cariño ───────────────────
+  if (/\b(hola|holi|holaa+|buenas|buenos dias|buenas tardes|buenas noches|hey|hi|hello)\b/.test(text)) {
+    return socialReply(bot, line('greet'))
+  }
+  if (/\b(gracias|grax|thx|thanks|te lo agradezco)\b/.test(text)) {
+    return socialReply(bot, line('thanks'))
+  }
+  if (/\b(bien hecho|buen trabajo|eres genial|eres la mejor|que linda|bien hecha|crack|grande mina)\b/.test(text)) {
+    return socialReply(bot, line('praise'))
+  }
+  if (/\b(te quiero|te amo|me caes bien|eres adorable|te adoro)\b/.test(text)) {
+    return socialReply(bot, line('love'))
   }
 
   return null // no es un comando → que decida el LLM
+}
+
+// Baile: salta y gira sobre sí misma unas cuantas veces.
+async function dance(bot) {
+  for (let i = 0; i < 6; i++) {
+    bot.setControlState('jump', true)
+    await skills.sleep(180)
+    bot.setControlState('jump', false)
+    try { await bot.look(bot.entity.yaw + Math.PI / 2, 0, true) } catch {}
+    await skills.sleep(180)
+  }
+}
+
+// Respuesta social con anti-spam: si varios saludan a la vez, no repite en 2.5s.
+// Devuelve handled:true igual para que el LLM no responda también.
+function socialReply(bot, text) {
+  const now = Date.now()
+  if (now - (bot.mina.lastSocial || 0) < 2500) return { handled: true, reply: null }
+  bot.mina.lastSocial = now
+  return reply(text)
 }
 
 function reply(text) {

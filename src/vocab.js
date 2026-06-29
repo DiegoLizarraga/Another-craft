@@ -4,26 +4,39 @@
 
 const BLOCK_WORDS = {
   madera: 'oak_log', tronco: 'oak_log', arbol: 'oak_log', árbol: 'oak_log',
-  roble: 'oak_log', abedul: 'birch_log', pino: 'spruce_log',
-  piedra: 'stone', cobblestone: 'cobblestone', roca: 'stone',
+  roble: 'oak_log', abedul: 'birch_log', pino: 'spruce_log', abeto: 'spruce_log',
+  jungla: 'jungle_log', acacia: 'acacia_log', cerezo: 'cherry_log',
+  tablas: 'oak_planks', tabla: 'oak_planks', palo: 'stick', palos: 'stick',
+  piedra: 'stone', cobblestone: 'cobblestone', roca: 'stone', adoquin: 'cobblestone',
   carbon: 'coal_ore', carbón: 'coal_ore',
   hierro: 'iron_ore', fierro: 'iron_ore',
   oro: 'gold_ore',
   diamante: 'diamond_ore', diamantes: 'diamond_ore',
   cobre: 'copper_ore', redstone: 'redstone_ore', esmeralda: 'emerald_ore',
+  lapis: 'lapis_ore', lapislazuli: 'lapis_ore', lapislázuli: 'lapis_ore',
+  cuarzo: 'nether_quartz_ore', obsidiana: 'obsidian',
   arena: 'sand', tierra: 'dirt', grava: 'gravel', arcilla: 'clay',
+  nieve: 'snow', hielo: 'ice', cesped: 'grass_block', césped: 'grass_block',
   trigo: 'wheat', zanahoria: 'carrots', papa: 'potatoes', patata: 'potatoes',
+  remolacha: 'beetroots', calabaza: 'pumpkin', melon: 'melon', melón: 'melon',
+  caña: 'sugar_cane', cana: 'sugar_cane', bambu: 'bamboo', bambú: 'bamboo',
+  mesa: 'crafting_table', horno: 'furnace', cofre: 'chest', antorcha: 'torch',
 }
 
 const MOB_WORDS = {
   zombi: 'zombie', zombie: 'zombie', muerto: 'zombie',
-  creeper: 'creeper',
-  esqueleto: 'skeleton',
-  arana: 'spider', araña: 'spider',
-  bruja: 'witch', enderman: 'enderman', slime: 'slime',
-  vaca: 'cow', cerdo: 'pig', puerco: 'pig', oveja: 'sheep',
-  pollo: 'chicken', gallina: 'chicken', caballo: 'horse',
-  aldeano: 'villager', lobo: 'wolf', conejo: 'rabbit',
+  creeper: 'creeper', creepers: 'creeper',
+  esqueleto: 'skeleton', esqueletos: 'skeleton',
+  arana: 'spider', araña: 'spider', aranas: 'spider', arañas: 'spider',
+  bruja: 'witch', enderman: 'enderman', slime: 'slime', limo: 'slime',
+  ahogado: 'drowned', husk: 'husk', momia: 'husk', phantom: 'phantom', fantasma: 'phantom',
+  saqueador: 'pillager', pillager: 'pillager', blaze: 'blaze',
+  vaca: 'cow', vacas: 'cow', cerdo: 'pig', puerco: 'pig', cerdos: 'pig',
+  oveja: 'sheep', ovejas: 'sheep', pollo: 'chicken', gallina: 'chicken', pollos: 'chicken',
+  caballo: 'horse', aldeano: 'villager', aldeanos: 'villager',
+  lobo: 'wolf', perro: 'wolf', conejo: 'rabbit', conejos: 'rabbit',
+  gato: 'cat', zorro: 'fox', oso: 'panda', panda: 'panda', abeja: 'bee', abejas: 'bee',
+  tortuga: 'turtle', delfin: 'dolphin', delfín: 'dolphin', axolote: 'axolotl', axolotl: 'axolotl',
 }
 
 function normalize(str) {
